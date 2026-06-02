@@ -17,6 +17,7 @@ async function getJson(path: string): Promise<any> {
 }
 
 // 全文検索 (ユーザー権限スコープ)。ヒットしたページパスを返す。
+// /trash/ 配下 (ゴミ箱 = 削除済みページ) は AI の根拠にしないため除外する。
 export async function searchPaths(query: string, limit = TOP_K): Promise<string[]> {
   const data = await getJson(
     `/_api/search?q=${encodeURIComponent(query)}&limit=${limit}`,
@@ -24,7 +25,8 @@ export async function searchPaths(query: string, limit = TOP_K): Promise<string[
   const items: any[] = data?.data ?? [];
   return items
     .map((it) => (it?.data?.path ?? it?.path) as string | undefined)
-    .filter((p): p is string => Boolean(p));
+    .filter((p): p is string => Boolean(p))
+    .filter((p) => !p.startsWith('/trash/'));
 }
 
 // ページ本文取得 (ユーザー権限スコープ)。見えないページは GROWI が弾く。
