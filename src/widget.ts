@@ -5,7 +5,7 @@ import { diffLines } from 'diff';
 import {
   retrieveAsUser, getCurrentPage, getCurrentPageFull, updatePage, createPage, type Passage,
 } from './growi-api';
-import { chat, toSearchQuery, editDraft, type Turn } from './backend';
+import { chat, toSearchQuery, editDraft, editDraftFromFile, type Turn } from './backend';
 
 const STYLE_ID = 'wiki-ai-chat-style';
 const ROOT_ID = 'wiki-ai-chat-root';
@@ -88,9 +88,16 @@ const CSS = `
 #${ROOT_ID} .wai-mode.active { color: var(--bs-primary, #4794d3); border-bottom-color: var(--bs-primary, #4794d3); font-weight: 600; }
 #${ROOT_ID} .wai-newpage { display: none; padding: 6px 12px 0; }
 #${ROOT_ID}.newpage .wai-newpage { display: block; }
-#${ROOT_ID} .wai-newpage input { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 13px;
+#${ROOT_ID} .wai-newpage .wai-path { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 13px;
   border: 1px solid var(--bs-border-color, #dee2e6); border-radius: 6px;
   background: var(--bs-body-bg, #fff); color: var(--bs-body-color, #212529); }
+#${ROOT_ID} .wai-attach-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#${ROOT_ID} .wai-attach { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
+  background: transparent; border: 1px solid var(--bs-border-color, #dee2e6); color: var(--bs-secondary-color, #6c757d);
+  border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+#${ROOT_ID} .wai-attach:hover { color: var(--bs-body-color, #212529); }
+#${ROOT_ID} .wai-attach-name { font-size: 12px; color: var(--bs-primary, #4794d3); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
 /* 差分カード */
 #${ROOT_ID} .wai-diff { background: var(--bs-body-bg, #fff); border: 1px solid var(--bs-border-color, #dee2e6);
   border-radius: var(--bs-border-radius, 8px); padding: 8px; align-self: stretch; }
@@ -120,6 +127,11 @@ const ICON_TRASH =
   + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
   + '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>'
   + '<path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>';
+const ICON_PAPERCLIP =
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+  + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66'
+  + 'l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
 const ICON_COPY =
   '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
   + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
@@ -189,6 +201,11 @@ export function mountWidget(): void {
         <div class="wai-log"></div>
         <div class="wai-newpage">
           <input class="wai-path" type="text" placeholder="新規ページのパス (例: /総務/新ルール) — 空なら現ページを編集" />
+          <div class="wai-attach-row">
+            <button type="button" class="wai-attach">${ICON_PAPERCLIP}<span>PDF/画像を添付</span></button>
+            <span class="wai-attach-name"></span>
+            <input type="file" class="wai-file" accept=".pdf,.txt,.md,.csv,image/*" hidden />
+          </div>
         </div>
         <div class="wai-ctx">
           <label><input type="checkbox" class="wai-ctx-toggle" /> このページも参照する</label>
@@ -209,9 +226,19 @@ export function mountWidget(): void {
   const ctxRow = root.querySelector('.wai-ctx') as HTMLElement;
   const newpageRow = root.querySelector('.wai-newpage') as HTMLElement;
   const pathInput = root.querySelector('.wai-path') as HTMLInputElement;
+  const fileInput = root.querySelector('.wai-file') as HTMLInputElement;
+  const attachBtn = root.querySelector('.wai-attach') as HTMLButtonElement;
+  const attachName = root.querySelector('.wai-attach-name') as HTMLElement;
 
   let history: Msg[] = loadHistory();
   let mode: 'chat' | 'edit' = 'chat';
+  let attachedFile: File | null = null;
+
+  attachBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    attachedFile = fileInput.files?.[0] || null;
+    attachName.textContent = attachedFile ? attachedFile.name : '';
+  });
 
   // 閲覧中ページがコンテンツページなら「このページも参照」を既定 ON
   getCurrentPage().then((pg) => { if (pg) ctxToggle.checked = true; });
@@ -338,16 +365,25 @@ export function mountWidget(): void {
   const submitEdit = async (instruction: string): Promise<void> => {
     input.value = '';
     autoGrow();
-    renderMsg({ role: 'user', text: instruction }); // 編集指示(履歴には保存しない)
+    const file = attachedFile;
+    const label = instruction + (file ? `\n(添付: ${file.name})` : '');
+    renderMsg({ role: 'user', text: label }); // 編集指示(履歴には保存しない)
     const newPath = pathInput.value.trim();
+    // 添付はクリア(UI)
+    attachedFile = null; fileInput.value = ''; attachName.textContent = '';
     const pending = el('<div class="wai-msg wai-bot"></div>');
-    pending.textContent = '下書き生成中…';
+    pending.textContent = file ? '添付を解析して下書き生成中…' : '下書き生成中…';
     log.appendChild(pending);
     log.scrollTop = log.scrollHeight;
+
+    // 下書き生成 (添付ありはファイル版、なしはテキスト版)
+    const draft = async (current: string | null, path: string | null): Promise<string> =>
+      file ? editDraftFromFile(instruction, file, current, path) : editDraft(instruction, current, path);
+
     try {
       if (newPath) {
         // 新規作成
-        const body = await editDraft(instruction, null, newPath);
+        const body = await draft(null, newPath);
         pending.remove();
         if (!body) { renderMsg({ role: 'bot', text: '下書きを生成できませんでした。' }); return; }
         renderDiff(newPath, null, body, async () => await createPage(newPath, body));
@@ -359,7 +395,7 @@ export function mountWidget(): void {
           pending.textContent = '編集対象のページを開いてから実行してください(または新規パスを入力)。';
           return;
         }
-        const body = await editDraft(instruction, full.body, full.path);
+        const body = await draft(full.body, full.path);
         pending.remove();
         if (!body) { renderMsg({ role: 'bot', text: '下書きを生成できませんでした。' }); return; }
         renderDiff(full.path, full.body, body, async () => {

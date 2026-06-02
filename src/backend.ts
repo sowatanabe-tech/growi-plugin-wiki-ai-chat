@@ -49,3 +49,22 @@ export async function editDraft(
   const data = await postJson('/edit', { instruction, current_body: currentBody, path });
   return data?.body ?? '';
 }
+
+// 添付ファイル(PDF/画像等)を主な情報源にして下書きを生成。
+export async function editDraftFromFile(
+  instruction: string,
+  file: File,
+  currentBody: string | null,
+  path: string | null,
+): Promise<string> {
+  const fd = new FormData();
+  fd.append('instruction', instruction);
+  fd.append('file', file);
+  if (currentBody != null) fd.append('current_body', currentBody);
+  if (path != null) fd.append('path', path);
+  const res = await fetch(`${BACKEND_URL}/edit-upload`, { method: 'POST', body: fd });
+  if (!res.ok) throw new Error(`Agent /edit-upload -> ${res.status}`);
+  const data = await res.json();
+  if (data?.error) throw new Error(data.error);
+  return data?.body ?? '';
+}
