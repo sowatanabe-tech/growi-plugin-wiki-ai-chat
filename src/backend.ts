@@ -38,3 +38,14 @@ export async function chat(
   const data = await postJson('/chat', { question, passages, history });
   return { text: data?.text ?? '', sources: data?.sources ?? [] };
 }
+
+// 編集相談: 指示から下書き Markdown を生成 (書き込みはしない)。
+// currentBody=null で新規作成、本文ありで既存改善。
+export async function editDraft(
+  instruction: string,
+  currentBody: string | null,
+  path: string | null,
+): Promise<string> {
+  const data = await postJson('/edit', { instruction, current_body: currentBody, path });
+  return data?.body ?? '';
+}

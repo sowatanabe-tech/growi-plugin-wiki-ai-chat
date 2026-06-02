@@ -47,24 +47,62 @@ export async function retrieveAsUser(query: string): Promise<Passage[]> {
   return results.filter((p): p is Passage => p !== null);
 }
 
-// いま閲覧しているページ本文を取得 (「このページについて質問」用)。
+export type PageFull = { path: string; body: string; pageId: string; revisionId: string };
+
+// いま閲覧しているページの生オブジェクトを取得。
 // GROWI の URL は「パス」か「24桁のページID」のどちらか。両対応する。
-export async function getCurrentPage(): Promise<Passage | null> {
+async function getCurrentPageRaw(): Promise<any | null> {
   const pathname = decodeURIComponent(location.pathname);
-  const isPageId = /^\/[0-9a-f]{24}$/.test(pathname);
+  if (/^\/[0-9a-f]{24}$/.test(pathname)) {
+    const data = await getJson(`/_api/v3/page?pageId=${pathname.slice(1)}`);
+    return data?.page ?? null;
+  }
+  if (pathname === '/' || pathname.startsWith('/_') || pathname.startsWith('/admin')) return null;
+  const data = await getJson(`/_api/v3/page?path=${encodeURIComponent(pathname)}`);
+  return data?.page ?? null;
+}
+
+// 「このページについて質問」用 (本文のみ)。
+export async function getCurrentPage(): Promise<Passage | null> {
   try {
-    if (isPageId) {
-      const id = pathname.slice(1);
-      const data = await getJson(`/_api/v3/page?pageId=${id}`);
-      const pg = data?.page;
-      const body: string = pg?.revision?.body ?? '';
-      if (!pg?.path || !body.trim()) return null;
-      return { path: pg.path, body: body.slice(0, MAX_BODY_CHARS) };
-    }
-    // ルート("/")やトップ等は対象外
-    if (pathname === '/' || pathname.startsWith('/_') || pathname.startsWith('/admin')) return null;
-    return await fetchPassage(pathname);
+    const pg = await getCurrentPageRaw();
+    const body: string = pg?.revision?.body ?? '';
+    if (!pg?.path || !body.trim()) return null;
+    return { path: pg.path, body: body.slice(0, MAX_BODY_CHARS) };
   } catch {
     return null;
   }
+}
+
+// 編集用 (pageId / revisionId 込み)。更新の楽観ロックに使う。
+export async function getCurrentPageFull(): Promise<PageFull | null> {
+  try {
+    const pg = await getCurrentPageRaw();
+    if (!pg?.path) return null;
+    return { path: pg.path, body: pg.revision?.body ?? '', pageId: pg._id, revisionId: pg.revision?._id ?? '' };
+  } catch {
+    return null;
+  }
+}
+
+// 既存ページ更新 (ユーザーのセッションで実行 = 編集権限を持つ人だけ成功)。
+export async function updatePage(pageId: string, revisionId: string, body: string): Promise<void> {
+  const res = await fetch('/_api/v3/page', {
+    method: 'PUT', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ pageId, revisionId, body }),
+  });
+  if (!res.ok) throw new Error(`更新失敗 (${res.status})`);
+}
+
+// 新規ページ作成 (ユーザーのセッションで実行)。作成後のパスを返す。
+export async function createPage(path: string, body: string): Promise<string> {
+  const res = await fetch('/_api/v3/page', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ path, body }),
+  });
+  if (!res.ok) throw new Error(`作成失敗 (${res.status})`);
+  const data = await res.json();
+  return data?.page?.path ?? path;
 }

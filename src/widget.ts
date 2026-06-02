@@ -1,8 +1,11 @@
 // フローティングのチャットウィジェット (素の DOM)。React 依存なし。
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { retrieveAsUser, getCurrentPage, type Passage } from './growi-api';
-import { chat, toSearchQuery, type Turn } from './backend';
+import { diffLines } from 'diff';
+import {
+  retrieveAsUser, getCurrentPage, getCurrentPageFull, updatePage, createPage, type Passage,
+} from './growi-api';
+import { chat, toSearchQuery, editDraft, type Turn } from './backend';
 
 const STYLE_ID = 'wiki-ai-chat-style';
 const ROOT_ID = 'wiki-ai-chat-root';
@@ -78,6 +81,28 @@ const CSS = `
 #${ROOT_ID} .wai-form button { border: none; background: var(--bs-primary, #4794d3); color: #fff;
   padding: 0 16px; height: 40px; cursor: pointer; }
 #${ROOT_ID} .wai-form button:hover { filter: brightness(0.93); }
+/* モードタブ */
+#${ROOT_ID} .wai-modes { display: flex; border-bottom: 1px solid var(--bs-border-color, #dee2e6); }
+#${ROOT_ID} .wai-mode { flex: 1; border: none; background: transparent; padding: 8px; cursor: pointer;
+  color: var(--bs-secondary-color, #6c757d); font-size: 13px; border-bottom: 2px solid transparent; }
+#${ROOT_ID} .wai-mode.active { color: var(--bs-primary, #4794d3); border-bottom-color: var(--bs-primary, #4794d3); font-weight: 600; }
+#${ROOT_ID} .wai-newpage { display: none; padding: 6px 12px 0; }
+#${ROOT_ID}.newpage .wai-newpage { display: block; }
+#${ROOT_ID} .wai-newpage input { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 13px;
+  border: 1px solid var(--bs-border-color, #dee2e6); border-radius: 6px;
+  background: var(--bs-body-bg, #fff); color: var(--bs-body-color, #212529); }
+/* 差分カード */
+#${ROOT_ID} .wai-diff { background: var(--bs-body-bg, #fff); border: 1px solid var(--bs-border-color, #dee2e6);
+  border-radius: var(--bs-border-radius, 8px); padding: 8px; align-self: stretch; }
+#${ROOT_ID} .wai-diff-target { font-size: 12px; color: var(--bs-secondary-color, #6c757d); margin-bottom: 6px; }
+#${ROOT_ID} .wai-diff pre { margin: 0; max-height: 220px; overflow: auto; font-size: 12px; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word; }
+#${ROOT_ID} .wai-diff .add { background: rgba(46,160,67,.18); display: block; }
+#${ROOT_ID} .wai-diff .del { background: rgba(248,81,73,.18); display: block; text-decoration: line-through; opacity: .8; }
+#${ROOT_ID} .wai-diff-btns { display: flex; gap: 8px; margin-top: 8px; }
+#${ROOT_ID} .wai-diff-btns button { border: none; border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px; }
+#${ROOT_ID} .wai-approve { background: var(--bs-success, #2da44e); color: #fff; }
+#${ROOT_ID} .wai-reject { background: transparent; border: 1px solid var(--bs-border-color, #dee2e6) !important; color: var(--bs-secondary-color, #6c757d); }
 `;
 
 const ICON_CHAT =
@@ -157,7 +182,14 @@ export function mountWidget(): void {
             <button class="wai-close" title="閉じる" aria-label="閉じる">${ICON_CLOSE}</button>
           </span>
         </div>
+        <div class="wai-modes">
+          <button type="button" class="wai-mode active" data-mode="chat">質問</button>
+          <button type="button" class="wai-mode" data-mode="edit">編集</button>
+        </div>
         <div class="wai-log"></div>
+        <div class="wai-newpage">
+          <input class="wai-path" type="text" placeholder="新規ページのパス (例: /総務/新ルール) — 空なら現ページを編集" />
+        </div>
         <div class="wai-ctx">
           <label><input type="checkbox" class="wai-ctx-toggle" /> このページも参照する</label>
         </div>
@@ -174,11 +206,31 @@ export function mountWidget(): void {
   const form = root.querySelector('.wai-form') as HTMLFormElement;
   const input = root.querySelector('.wai-input') as HTMLTextAreaElement;
   const ctxToggle = root.querySelector('.wai-ctx-toggle') as HTMLInputElement;
+  const ctxRow = root.querySelector('.wai-ctx') as HTMLElement;
+  const newpageRow = root.querySelector('.wai-newpage') as HTMLElement;
+  const pathInput = root.querySelector('.wai-path') as HTMLInputElement;
 
   let history: Msg[] = loadHistory();
+  let mode: 'chat' | 'edit' = 'chat';
 
   // 閲覧中ページがコンテンツページなら「このページも参照」を既定 ON
   getCurrentPage().then((pg) => { if (pg) ctxToggle.checked = true; });
+
+  const setMode = (m: 'chat' | 'edit'): void => {
+    mode = m;
+    root.querySelectorAll('.wai-mode').forEach((b) => {
+      b.classList.toggle('active', (b as HTMLElement).dataset.mode === m);
+    });
+    ctxRow.style.display = m === 'chat' ? '' : 'none';
+    newpageRow.style.display = m === 'edit' ? 'block' : 'none';
+    input.placeholder = m === 'chat'
+      ? 'Wiki に質問… (Enter送信 / Shift+Enter改行)'
+      : '編集の指示… (例: この章をわかりやすく / FAQを1つ追加)';
+  };
+  setMode('chat');
+  root.querySelectorAll('.wai-mode').forEach((b) => {
+    b.addEventListener('click', () => setMode((b as HTMLElement).dataset.mode as 'chat' | 'edit'));
+  });
 
   const renderMsg = (msg: Msg): HTMLElement => {
     const m = el(`<div class="wai-msg ${msg.role === 'user' ? 'wai-user' : 'wai-bot'}"></div>`);
@@ -238,7 +290,91 @@ export function mountWidget(): void {
     }
   });
 
-  const submit = async (): Promise<void> => {
+  // 差分カードを描画 (current vs proposed)。承認で書き込み。
+  const renderDiff = (target: string, current: string | null, proposed: string,
+                      onApprove: () => Promise<string>): void => {
+    const card = el('<div class="wai-diff"></div>');
+    card.appendChild(el(`<div class="wai-diff-target">${current === null ? '新規作成' : '編集'}: ${escapeHtml(target)}</div>`));
+    const pre = document.createElement('pre');
+    if (current === null) {
+      pre.textContent = proposed; // 新規は全文プレビュー
+    } else {
+      for (const part of diffLines(current, proposed)) {
+        const span = document.createElement('span');
+        if (part.added) span.className = 'add';
+        else if (part.removed) span.className = 'del';
+        span.textContent = part.value;
+        pre.appendChild(span);
+      }
+    }
+    card.appendChild(pre);
+    const btns = el('<div class="wai-diff-btns"></div>');
+    const approve = el('<button class="wai-approve" type="button">承認して反映</button>');
+    const reject = el('<button class="wai-reject" type="button">却下</button>');
+    btns.appendChild(approve);
+    btns.appendChild(reject);
+    card.appendChild(btns);
+    log.appendChild(card);
+    log.scrollTop = log.scrollHeight;
+
+    reject.addEventListener('click', () => card.remove());
+    approve.addEventListener('click', async () => {
+      approve.textContent = '反映中…';
+      (approve as HTMLButtonElement).disabled = true;
+      try {
+        const resultPath = await onApprove();
+        btns.remove();
+        const ok = el(`<div class="wai-diff-target">✓ 反映しました: <a href="${encodeURI(resultPath)}" target="_blank" rel="noopener">${escapeHtml(resultPath)}</a></div>`);
+        card.appendChild(ok);
+      } catch (err) {
+        approve.textContent = '承認して反映';
+        (approve as HTMLButtonElement).disabled = false;
+        const e = el(`<div class="wai-diff-target" style="color:var(--bs-danger,#d33)">エラー: ${escapeHtml((err as Error).message)}</div>`);
+        card.appendChild(e);
+      }
+    });
+  };
+
+  const submitEdit = async (instruction: string): Promise<void> => {
+    input.value = '';
+    autoGrow();
+    renderMsg({ role: 'user', text: instruction }); // 編集指示(履歴には保存しない)
+    const newPath = pathInput.value.trim();
+    const pending = el('<div class="wai-msg wai-bot"></div>');
+    pending.textContent = '下書き生成中…';
+    log.appendChild(pending);
+    log.scrollTop = log.scrollHeight;
+    try {
+      if (newPath) {
+        // 新規作成
+        const body = await editDraft(instruction, null, newPath);
+        pending.remove();
+        if (!body) { renderMsg({ role: 'bot', text: '下書きを生成できませんでした。' }); return; }
+        renderDiff(newPath, null, body, async () => await createPage(newPath, body));
+      } else {
+        // 現ページ改善
+        const full = await getCurrentPageFull();
+        if (!full) {
+          pending.className = 'wai-msg wai-bot';
+          pending.textContent = '編集対象のページを開いてから実行してください(または新規パスを入力)。';
+          return;
+        }
+        const body = await editDraft(instruction, full.body, full.path);
+        pending.remove();
+        if (!body) { renderMsg({ role: 'bot', text: '下書きを生成できませんでした。' }); return; }
+        renderDiff(full.path, full.body, body, async () => {
+          await updatePage(full.pageId, full.revisionId, body);
+          return full.path;
+        });
+      }
+    } catch (err) {
+      pending.className = 'wai-msg wai-bot';
+      pending.textContent = `エラー: ${(err as Error).message}`;
+    }
+    log.scrollTop = log.scrollHeight;
+  };
+
+  const submitChat = async (): Promise<void> => {
     const question = input.value.trim();
     if (!question) return;
     input.value = '';
@@ -283,7 +419,13 @@ export function mountWidget(): void {
     log.scrollTop = log.scrollHeight;
   };
 
-  form.addEventListener('submit', (e) => { e.preventDefault(); void submit(); });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    if (mode === 'edit') void submitEdit(text);
+    else void submitChat();
+  });
 }
 
 export function unmountWidget(): void {
