@@ -1,0 +1,19 @@
+{
+  "name": "growi-plugin-wiki-ai-chat",
+  "version": "0.1.0",
+  "description": "GROWI 埋め込み AI チャット (Gemini)。検索はユーザーのログインセッションで実行し権限に一致させる。",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch"
+  },
+  "devDependencies": {
+    "@growi/pluginkit": "^1.2.4",
+    "typescript": "^5.4.0",
+    "vite": "^5.2.0"
+  },
+  "growiPlugin": {
+    "schemaVersion": "4",
+    "types": ["script"]
+  }
+}
