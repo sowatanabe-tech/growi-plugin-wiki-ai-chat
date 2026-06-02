@@ -1,11 +1,16 @@
 // フローティングのチャットウィジェット (素の DOM)。React 依存なし。
-import { retrieveAsUser } from './growi-api';
-import { chat, toSearchQuery } from './backend';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+import { retrieveAsUser, getCurrentPage, type Passage } from './growi-api';
+import { chat, toSearchQuery, type Turn } from './backend';
 
 const STYLE_ID = 'wiki-ai-chat-style';
 const ROOT_ID = 'wiki-ai-chat-root';
 const HISTORY_KEY = 'wiki-ai-chat-history';
-const HISTORY_MAX = 50; // 保存する最大メッセージ数 (localStorage の肥大化防止)
+const HISTORY_MAX = 50; // localStorage 保存の最大メッセージ数
+const CONTEXT_TURNS = 6; // マルチターンで Gemini に渡す直近会話数
+
+marked.setOptions({ breaks: true });
 
 type Role = 'user' | 'bot';
 interface Msg {
@@ -15,7 +20,6 @@ interface Msg {
 }
 
 // GROWI (Bootstrap 5) の CSS 変数に追従し、ライト/ダーク両テーマに馴染ませる。
-// 変数が無い環境向けにフォールバック値も指定。
 const CSS = `
 #${ROOT_ID} { position: fixed; right: 20px; bottom: 20px; z-index: 1050; font-size: 14px;
   font-family: var(--bs-body-font-family, system-ui, sans-serif); }
@@ -24,7 +28,7 @@ const CSS = `
   background: var(--bs-primary, #4794d3); color: #fff; cursor: pointer;
   box-shadow: 0 4px 12px rgba(0,0,0,.25); display: flex; align-items: center; justify-content: center; }
 #${ROOT_ID} .wai-fab:hover { filter: brightness(0.93); }
-#${ROOT_ID} .wai-panel { display: none; flex-direction: column; width: 360px; height: 520px;
+#${ROOT_ID} .wai-panel { display: none; flex-direction: column; width: 380px; height: 540px;
   background: var(--bs-body-bg, #fff); color: var(--bs-body-color, #212529);
   border: 1px solid var(--bs-border-color, #dee2e6); border-radius: var(--bs-border-radius-lg, 12px);
   overflow: hidden; box-shadow: 0 8px 28px rgba(0,0,0,.22); }
@@ -39,12 +43,25 @@ const CSS = `
 #${ROOT_ID} .wai-head button:hover { opacity: 1; background: rgba(255,255,255,.18); }
 #${ROOT_ID} .wai-log { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column;
   background: var(--bs-tertiary-bg, var(--bs-secondary-bg, #f8f9fa)); }
-#${ROOT_ID} .wai-msg { max-width: 88%; margin-bottom: 10px; padding: 8px 10px;
-  border-radius: var(--bs-border-radius, 8px); white-space: pre-wrap; line-height: 1.5; word-break: break-word; }
-#${ROOT_ID} .wai-user { align-self: flex-end; background: var(--bs-primary-bg-subtle, #cfe2ff);
-  color: var(--bs-emphasis-color, var(--bs-body-color, #212529)); }
+#${ROOT_ID} .wai-msg { max-width: 90%; margin-bottom: 10px; padding: 8px 10px;
+  border-radius: var(--bs-border-radius, 8px); line-height: 1.5; word-break: break-word; }
+#${ROOT_ID} .wai-user { align-self: flex-end; white-space: pre-wrap;
+  background: var(--bs-primary-bg-subtle, #cfe2ff); color: var(--bs-emphasis-color, var(--bs-body-color, #212529)); }
 #${ROOT_ID} .wai-bot { align-self: flex-start; background: var(--bs-body-bg, #fff);
   border: 1px solid var(--bs-border-color, #dee2e6); }
+/* Markdown 描画 */
+#${ROOT_ID} .wai-md > *:first-child { margin-top: 0; }
+#${ROOT_ID} .wai-md > *:last-child { margin-bottom: 0; }
+#${ROOT_ID} .wai-md p { margin: 0 0 .5em; }
+#${ROOT_ID} .wai-md ul, #${ROOT_ID} .wai-md ol { margin: 0 0 .5em; padding-left: 1.3em; }
+#${ROOT_ID} .wai-md h1, #${ROOT_ID} .wai-md h2, #${ROOT_ID} .wai-md h3 { font-size: 1.05em; margin: .6em 0 .3em; }
+#${ROOT_ID} .wai-md code { background: var(--bs-tertiary-bg, #f1f3f5); padding: .1em .3em; border-radius: 4px; font-size: .9em; }
+#${ROOT_ID} .wai-md pre { background: var(--bs-tertiary-bg, #f1f3f5); padding: 8px; border-radius: 6px; overflow-x: auto; }
+#${ROOT_ID} .wai-md pre code { background: none; padding: 0; }
+#${ROOT_ID} .wai-md a { color: var(--bs-link-color, var(--bs-primary, #4794d3)); }
+#${ROOT_ID} .wai-md table { border-collapse: collapse; margin: .3em 0; }
+#${ROOT_ID} .wai-md th, #${ROOT_ID} .wai-md td { border: 1px solid var(--bs-border-color, #dee2e6); padding: 3px 7px; }
+#${ROOT_ID} .wai-md blockquote { border-left: 3px solid var(--bs-border-color, #dee2e6); margin: 0 0 .5em; padding-left: .7em; color: var(--bs-secondary-color, #6c757d); }
 #${ROOT_ID} .wai-src { font-size: 12px; color: var(--bs-secondary-color, #6c757d); margin-top: 6px; }
 #${ROOT_ID} .wai-src a { color: var(--bs-link-color, var(--bs-primary, #4794d3)); }
 #${ROOT_ID} .wai-actions { margin-top: 6px; }
@@ -52,11 +69,14 @@ const CSS = `
   color: var(--bs-secondary-color, #6c757d); border-radius: 6px; padding: 2px 8px; cursor: pointer;
   display: inline-flex; align-items: center; gap: 4px; }
 #${ROOT_ID} .wai-copy:hover { color: var(--bs-body-color, #212529); border-color: var(--bs-secondary-color, #6c757d); }
-#${ROOT_ID} .wai-form { display: flex; border-top: 1px solid var(--bs-border-color, #dee2e6); }
-#${ROOT_ID} .wai-form input { flex: 1; border: none; padding: 10px; outline: none;
-  background: var(--bs-body-bg, #fff); color: var(--bs-body-color, #212529); }
+#${ROOT_ID} .wai-ctx { display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px;
+  color: var(--bs-secondary-color, #6c757d); border-top: 1px solid var(--bs-border-color, #dee2e6); }
+#${ROOT_ID} .wai-ctx label { display: flex; align-items: center; gap: 6px; cursor: pointer; margin: 0; }
+#${ROOT_ID} .wai-form { display: flex; align-items: flex-end; border-top: 1px solid var(--bs-border-color, #dee2e6); }
+#${ROOT_ID} .wai-input { flex: 1; border: none; padding: 10px; outline: none; resize: none; max-height: 120px;
+  background: var(--bs-body-bg, #fff); color: var(--bs-body-color, #212529); font-family: inherit; font-size: 14px; line-height: 1.4; }
 #${ROOT_ID} .wai-form button { border: none; background: var(--bs-primary, #4794d3); color: #fff;
-  padding: 0 16px; cursor: pointer; }
+  padding: 0 16px; height: 40px; cursor: pointer; }
 #${ROOT_ID} .wai-form button:hover { filter: brightness(0.93); }
 `;
 
@@ -99,11 +119,15 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 }
 
+function renderMarkdown(text: string): string {
+  const html = marked.parse(text, { async: false }) as string;
+  return DOMPurify.sanitize(html, { ADD_ATTR: ['target', 'rel'] });
+}
+
 // --- localStorage 履歴 ---
 function loadHistory(): Msg[] {
   try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    const arr = raw ? JSON.parse(raw) : [];
+    const arr = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
     return Array.isArray(arr) ? arr : [];
   } catch {
     return [];
@@ -114,7 +138,7 @@ function saveHistory(history: Msg[]): void {
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-HISTORY_MAX)));
   } catch {
-    /* 容量超過等は黙って無視 */
+    /* 容量超過等は無視 */
   }
 }
 
@@ -134,8 +158,11 @@ export function mountWidget(): void {
           </span>
         </div>
         <div class="wai-log"></div>
+        <div class="wai-ctx">
+          <label><input type="checkbox" class="wai-ctx-toggle" /> このページも参照する</label>
+        </div>
         <form class="wai-form">
-          <input type="text" placeholder="Wiki に質問…" autocomplete="off" />
+          <textarea class="wai-input" rows="1" placeholder="Wiki に質問… (Enter送信 / Shift+Enter改行)"></textarea>
           <button type="submit">送信</button>
         </form>
       </div>
@@ -145,15 +172,23 @@ export function mountWidget(): void {
 
   const log = root.querySelector('.wai-log') as HTMLElement;
   const form = root.querySelector('.wai-form') as HTMLFormElement;
-  const input = root.querySelector('input') as HTMLInputElement;
+  const input = root.querySelector('.wai-input') as HTMLTextAreaElement;
+  const ctxToggle = root.querySelector('.wai-ctx-toggle') as HTMLInputElement;
 
   let history: Msg[] = loadHistory();
 
-  // 1 メッセージ分の DOM を生成 (bot にはコピー & 参照を付ける)
+  // 閲覧中ページがコンテンツページなら「このページも参照」を既定 ON
+  getCurrentPage().then((pg) => { if (pg) ctxToggle.checked = true; });
+
   const renderMsg = (msg: Msg): HTMLElement => {
     const m = el(`<div class="wai-msg ${msg.role === 'user' ? 'wai-user' : 'wai-bot'}"></div>`);
     const body = document.createElement('div');
-    body.textContent = msg.text;
+    if (msg.role === 'bot') {
+      body.className = 'wai-md';
+      body.innerHTML = renderMarkdown(msg.text);
+    } else {
+      body.textContent = msg.text;
+    }
     m.appendChild(body);
 
     if (msg.role === 'bot') {
@@ -172,9 +207,7 @@ export function mountWidget(): void {
           const prev = label.textContent;
           label.textContent = 'コピーしました';
           setTimeout(() => { label.textContent = prev; }, 1500);
-        } catch {
-          /* クリップボード不可環境は無視 */
-        }
+        } catch { /* 無視 */ }
       });
       actions.appendChild(copyBtn);
       m.appendChild(actions);
@@ -184,10 +217,9 @@ export function mountWidget(): void {
     return m;
   };
 
-  // 履歴を復元 (保存はしない)
   history.forEach(renderMsg);
 
-  root.querySelector('.wai-fab')!.addEventListener('click', () => root.classList.add('open'));
+  root.querySelector('.wai-fab')!.addEventListener('click', () => { root.classList.add('open'); input.focus(); });
   root.querySelector('.wai-close')!.addEventListener('click', () => root.classList.remove('open'));
   root.querySelector('.wai-clear')!.addEventListener('click', () => {
     history = [];
@@ -195,37 +227,63 @@ export function mountWidget(): void {
     log.innerHTML = '';
   });
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
+  // textarea 自動リサイズ
+  const autoGrow = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 120) + 'px'; };
+  input.addEventListener('input', autoGrow);
+  // Enter 送信 / Shift+Enter 改行
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
+  const submit = async (): Promise<void> => {
     const question = input.value.trim();
     if (!question) return;
     input.value = '';
+    autoGrow();
+
+    // マルチターン: 現在の質問を積む前の直近会話を文脈として渡す
+    const priorTurns: Turn[] = history.slice(-CONTEXT_TURNS).map((m) => ({ role: m.role, text: m.text }));
 
     const userMsg: Msg = { role: 'user', text: question };
     renderMsg(userMsg);
     history.push(userMsg);
     saveHistory(history);
 
-    // 考え中… (履歴には保存しない仮メッセージ)
     const pending = el('<div class="wai-msg wai-bot"></div>');
-    pending.textContent = '考え中…';
+    pending.textContent = '検索中…';
     log.appendChild(pending);
     log.scrollTop = log.scrollHeight;
 
     try {
+      const passages: Passage[] = [];
+      // 「このページも参照」が ON なら閲覧中ページを先頭に固定
+      if (ctxToggle.checked) {
+        const cur = await getCurrentPage();
+        if (cur) passages.push(cur);
+      }
       const query = await toSearchQuery(question);
-      const passages = await retrieveAsUser(query); // ← ユーザー権限で検索
-      const { text, sources } = await chat(question, passages);
+      pending.textContent = '回答生成中…';
+      const found = await retrieveAsUser(query); // ← ユーザー権限で検索
+      // 現在ページと重複しないものを追加
+      for (const p of found) if (!passages.some((x) => x.path === p.path)) passages.push(p);
+
+      const { text, sources } = await chat(question, passages, priorTurns);
       pending.remove();
       const botMsg: Msg = { role: 'bot', text: text || '(回答が空でした)', sources };
       renderMsg(botMsg);
       history.push(botMsg);
       saveHistory(history);
     } catch (err) {
+      pending.className = 'wai-msg wai-bot';
       pending.textContent = `エラー: ${(err as Error).message}`;
     }
     log.scrollTop = log.scrollHeight;
-  });
+  };
+
+  form.addEventListener('submit', (e) => { e.preventDefault(); void submit(); });
 }
 
 export function unmountWidget(): void {

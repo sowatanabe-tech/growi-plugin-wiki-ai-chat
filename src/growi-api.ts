@@ -46,3 +46,25 @@ export async function retrieveAsUser(query: string): Promise<Passage[]> {
   const results = await Promise.all(paths.map(fetchPassage));
   return results.filter((p): p is Passage => p !== null);
 }
+
+// いま閲覧しているページ本文を取得 (「このページについて質問」用)。
+// GROWI の URL は「パス」か「24桁のページID」のどちらか。両対応する。
+export async function getCurrentPage(): Promise<Passage | null> {
+  const pathname = decodeURIComponent(location.pathname);
+  const isPageId = /^\/[0-9a-f]{24}$/.test(pathname);
+  try {
+    if (isPageId) {
+      const id = pathname.slice(1);
+      const data = await getJson(`/_api/v3/page?pageId=${id}`);
+      const pg = data?.page;
+      const body: string = pg?.revision?.body ?? '';
+      if (!pg?.path || !body.trim()) return null;
+      return { path: pg.path, body: body.slice(0, MAX_BODY_CHARS) };
+    }
+    // ルート("/")やトップ等は対象外
+    if (pathname === '/' || pathname.startsWith('/_') || pathname.startsWith('/admin')) return null;
+    return await fetchPassage(pathname);
+  } catch {
+    return null;
+  }
+}

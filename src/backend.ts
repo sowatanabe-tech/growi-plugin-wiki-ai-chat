@@ -26,9 +26,15 @@ export async function toSearchQuery(question: string): Promise<string> {
 }
 
 export type ChatResult = { text: string; sources: string[] };
+export type Turn = { role: 'user' | 'bot'; text: string };
 
-// 取得済み抜粋 + 質問 → 回答 (Gemini)。本文はユーザー権限内のものだけが渡る。
-export async function chat(question: string, passages: Passage[]): Promise<ChatResult> {
-  const data = await postJson('/chat', { question, passages });
+// 取得済み抜粋 + 質問 (+直近の会話履歴) → 回答 (Gemini)。
+// 本文はユーザー権限内のものだけが渡る。history はマルチターン文脈用。
+export async function chat(
+  question: string,
+  passages: Passage[],
+  history: Turn[] = [],
+): Promise<ChatResult> {
+  const data = await postJson('/chat', { question, passages, history });
   return { text: data?.text ?? '', sources: data?.sources ?? [] };
 }
