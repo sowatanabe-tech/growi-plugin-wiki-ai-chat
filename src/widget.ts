@@ -88,7 +88,9 @@ const CSS = `
 #${ROOT_ID} .wai-mode.active { color: var(--bs-primary, #4794d3); border-bottom-color: var(--bs-primary, #4794d3); font-weight: 600; }
 #${ROOT_ID} .wai-newpage { display: none; padding: 6px 12px 0; }
 #${ROOT_ID}.newpage .wai-newpage { display: block; }
-#${ROOT_ID} .wai-newpage .wai-path { width: 100%; box-sizing: border-box; padding: 6px 8px; font-size: 13px;
+#${ROOT_ID} .wai-newpage-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--bs-secondary-color, #6c757d); cursor: pointer; margin: 0; }
+#${ROOT_ID} .wai-path-edit { box-sizing: border-box; padding: 4px 8px; font-size: 13px; min-width: 200px;
   border: 1px solid var(--bs-border-color, #dee2e6); border-radius: 6px;
   background: var(--bs-body-bg, #fff); color: var(--bs-body-color, #212529); }
 #${ROOT_ID} .wai-attach-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
@@ -200,7 +202,7 @@ export function mountWidget(): void {
         </div>
         <div class="wai-log"></div>
         <div class="wai-newpage">
-          <input class="wai-path" type="text" placeholder="新規ページのパス (例: /総務/新ルール) — 空なら現ページを編集" />
+          <label class="wai-newpage-toggle"><input type="checkbox" class="wai-newpage-check" /> 新規ページとして作成（パスはAIが提案・あとで修正可）</label>
           <div class="wai-attach-row">
             <button type="button" class="wai-attach">${ICON_PAPERCLIP}<span>PDF/画像を添付</span></button>
             <span class="wai-attach-name"></span>
@@ -225,7 +227,7 @@ export function mountWidget(): void {
   const ctxToggle = root.querySelector('.wai-ctx-toggle') as HTMLInputElement;
   const ctxRow = root.querySelector('.wai-ctx') as HTMLElement;
   const newpageRow = root.querySelector('.wai-newpage') as HTMLElement;
-  const pathInput = root.querySelector('.wai-path') as HTMLInputElement;
+  const newpageCheck = root.querySelector('.wai-newpage-check') as HTMLInputElement;
   const fileInput = root.querySelector('.wai-file') as HTMLInputElement;
   const attachBtn = root.querySelector('.wai-attach') as HTMLButtonElement;
   const attachName = root.querySelector('.wai-attach-name') as HTMLElement;
@@ -325,11 +327,26 @@ export function mountWidget(): void {
     }
   });
 
-  // 差分カードを描画 (current vs proposed)。承認で書き込み。
-  const renderDiff = (target: string, current: string | null, proposed: string,
-                      onApprove: () => Promise<string>): void => {
+  // 差分カードを描画。新規(editablePath)は AI 提案パスを編集可能な入力で表示。
+  // onApprove は確定パスを受け取り、反映後の実パスを返す。
+  const renderDiff = (opts: {
+    current: string | null; proposed: string; targetPath: string;
+    editablePath: boolean; onApprove: (path: string) => Promise<string>;
+  }): void => {
+    const { current, proposed, targetPath, editablePath, onApprove } = opts;
     const card = el('<div class="wai-diff"></div>');
-    card.appendChild(el(`<div class="wai-diff-target">${current === null ? '新規作成' : '編集'}: ${escapeHtml(target)}</div>`));
+
+    let pathField: HTMLInputElement | null = null;
+    if (editablePath) {
+      const row = el('<div class="wai-diff-target">作成先パス: </div>');
+      pathField = el('<input class="wai-path-edit" type="text" />') as HTMLInputElement;
+      pathField.value = targetPath;
+      row.appendChild(pathField);
+      card.appendChild(row);
+    } else {
+      card.appendChild(el(`<div class="wai-diff-target">編集: ${escapeHtml(targetPath)}</div>`));
+    }
+
     const pre = document.createElement('pre');
     if (current === null) {
       pre.textContent = proposed; // 新規は全文プレビュー
@@ -354,11 +371,17 @@ export function mountWidget(): void {
 
     reject.addEventListener('click', () => card.remove());
     approve.addEventListener('click', async () => {
+      const path = pathField ? pathField.value.trim() : targetPath;
+      if (editablePath && (!path || !path.startsWith('/'))) {
+        pathField?.focus();
+        return; // パス未入力/形式不正は反映しない
+      }
       approve.textContent = '反映中…';
       (approve as HTMLButtonElement).disabled = true;
       try {
-        const resultPath = await onApprove();
+        const resultPath = await onApprove(path);
         btns.remove();
+        if (pathField) pathField.disabled = true;
         const ok = el(`<div class="wai-diff-target">✓ 反映しました: <a href="${encodeURI(resultPath)}" target="_blank" rel="noopener">${escapeHtml(resultPath)}</a></div>`);
         card.appendChild(ok);
       } catch (err) {
@@ -374,9 +397,9 @@ export function mountWidget(): void {
     input.value = '';
     autoGrow();
     const file = attachedFile;
+    const isNew = newpageCheck.checked;
     const label = instruction + (file ? `\n(添付: ${file.name})` : '');
     renderMsg({ role: 'user', text: label }); // 編集指示(履歴には保存しない)
-    const newPath = pathInput.value.trim();
     // 添付はクリア(UI)
     attachedFile = null; fileInput.value = ''; attachName.textContent = '';
     const pending = el('<div class="wai-msg wai-bot"></div>');
@@ -384,31 +407,36 @@ export function mountWidget(): void {
     log.appendChild(pending);
     log.scrollTop = log.scrollHeight;
 
-    // 下書き生成 (添付ありはファイル版、なしはテキスト版)
-    const draft = async (current: string | null, path: string | null): Promise<string> =>
+    // 下書き生成 (添付ありはファイル版、なしはテキスト版) → {body, suggestedPath}
+    const draft = (current: string | null, path: string | null) =>
       file ? editDraftFromFile(instruction, file, current, path) : editDraft(instruction, current, path);
 
     try {
-      if (newPath) {
-        // 新規作成
-        const body = await draft(null, newPath);
+      if (isNew) {
+        // 新規作成: AI が本文とパスを提案 → パスは承認カードで編集可能
+        const { body, suggestedPath } = await draft(null, null);
         pending.remove();
         if (!body) { renderMsg({ role: 'bot', text: '下書きを生成できませんでした。' }); return; }
-        renderDiff(newPath, null, body, async () => await createPage(newPath, body));
+        renderDiff({
+          current: null, proposed: body, targetPath: suggestedPath || '/',
+          editablePath: true,
+          onApprove: async (path) => await createPage(path, body),
+        });
       } else {
         // 現ページ改善
         const full = await getCurrentPageFull();
         if (!full) {
           pending.className = 'wai-msg wai-bot';
-          pending.textContent = '編集対象のページを開いてから実行してください(または新規パスを入力)。';
+          pending.textContent = '編集対象のページを開いてから実行してください（または「新規ページとして作成」にチェック）。';
           return;
         }
-        const body = await draft(full.body, full.path);
+        const { body } = await draft(full.body, full.path);
         pending.remove();
         if (!body) { renderMsg({ role: 'bot', text: '下書きを生成できませんでした。' }); return; }
-        renderDiff(full.path, full.body, body, async () => {
-          await updatePage(full.pageId, full.revisionId, body);
-          return full.path;
+        renderDiff({
+          current: full.body, proposed: body, targetPath: full.path,
+          editablePath: false,
+          onApprove: async () => { await updatePage(full.pageId, full.revisionId, body); return full.path; },
         });
       }
     } catch (err) {

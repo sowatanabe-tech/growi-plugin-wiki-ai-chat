@@ -39,15 +39,17 @@ export async function chat(
   return { text: data?.text ?? '', sources: data?.sources ?? [] };
 }
 
+export type EditResult = { body: string; suggestedPath: string | null };
+
 // 編集相談: 指示から下書き Markdown を生成 (書き込みはしない)。
-// currentBody=null で新規作成、本文ありで既存改善。
+// currentBody=null で新規作成 → suggestedPath に AI 提案パスが入る。
 export async function editDraft(
   instruction: string,
   currentBody: string | null,
   path: string | null,
-): Promise<string> {
+): Promise<EditResult> {
   const data = await postJson('/edit', { instruction, current_body: currentBody, path });
-  return data?.body ?? '';
+  return { body: data?.body ?? '', suggestedPath: data?.suggested_path ?? null };
 }
 
 // 添付ファイル(PDF/画像等)を主な情報源にして下書きを生成。
@@ -56,7 +58,7 @@ export async function editDraftFromFile(
   file: File,
   currentBody: string | null,
   path: string | null,
-): Promise<string> {
+): Promise<EditResult> {
   const fd = new FormData();
   fd.append('instruction', instruction);
   fd.append('file', file);
@@ -66,5 +68,5 @@ export async function editDraftFromFile(
   if (!res.ok) throw new Error(`Agent /edit-upload -> ${res.status}`);
   const data = await res.json();
   if (data?.error) throw new Error(data.error);
-  return data?.body ?? '';
+  return { body: data?.body ?? '', suggestedPath: data?.suggested_path ?? null };
 }
