@@ -158,6 +158,15 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 }
 
+// 新規作成パスの妥当性。予約領域・二重スラッシュ・制御文字を弾く。
+function isValidNewPath(path: string): boolean {
+  if (!path.startsWith('/') || path.length < 2) return false;
+  if (path.includes('//')) return false;
+  if (/^\/(trash|admin|_)(\/|$)/.test(path)) return false; // 予約: /trash /admin /_api 等
+  for (let i = 0; i < path.length; i++) if (path.charCodeAt(i) < 0x20) return false; // 制御文字
+  return true;
+}
+
 function renderMarkdown(text: string): string {
   const html = marked.parse(text, { async: false }) as string;
   return DOMPurify.sanitize(html, { ADD_ATTR: ['target', 'rel'] });
@@ -372,9 +381,10 @@ export function mountWidget(): void {
     reject.addEventListener('click', () => card.remove());
     approve.addEventListener('click', async () => {
       const path = pathField ? pathField.value.trim() : targetPath;
-      if (editablePath && (!path || !path.startsWith('/'))) {
+      if (editablePath && !isValidNewPath(path)) {
         pathField?.focus();
-        return; // パス未入力/形式不正は反映しない
+        pathField?.setAttribute('title', '先頭が / で、//・/_・/trash・/admin・制御文字を含まないパスにしてください');
+        return; // パス形式が不正なら反映しない
       }
       approve.textContent = '反映中…';
       (approve as HTMLButtonElement).disabled = true;
@@ -436,7 +446,15 @@ export function mountWidget(): void {
         renderDiff({
           current: full.body, proposed: body, targetPath: full.path,
           editablePath: false,
-          onApprove: async () => { await updatePage(full.pageId, full.revisionId, body); return full.path; },
+          onApprove: async () => {
+            // 承認直前に最新リビジョンを再確認し、他者編集との競合(上書き)を防ぐ
+            const latest = await getCurrentPageFull();
+            if (latest && latest.revisionId !== full.revisionId) {
+              throw new Error('このページは他の人に更新されました。開き直してやり直してください。');
+            }
+            await updatePage(full.pageId, full.revisionId, body);
+            return full.path;
+          },
         });
       }
     } catch (err) {
