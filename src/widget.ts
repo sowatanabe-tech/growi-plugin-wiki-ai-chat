@@ -8,7 +8,11 @@ const ROOT_ID = 'wiki-ai-chat-root';
 const CSS = `
 #${ROOT_ID} { position: fixed; right: 20px; bottom: 20px; z-index: 1050; font-size: 14px; }
 #${ROOT_ID} .wai-fab { width: 56px; height: 56px; border-radius: 50%; border: none;
-  background: #1d72b8; color: #fff; font-size: 22px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,.25); }
+  background: #1d72b8; color: #fff; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,.25);
+  display: flex; align-items: center; justify-content: center; }
+#${ROOT_ID} .wai-fab:hover { background: #155a91; }
+#${ROOT_ID} svg { display: block; }
+#${ROOT_ID} .wai-head button { display: flex; align-items: center; }
 #${ROOT_ID} .wai-panel { display: none; flex-direction: column; width: 360px; height: 480px;
   background: #fff; border: 1px solid #d0d7de; border-radius: 12px; overflow: hidden;
   box-shadow: 0 8px 28px rgba(0,0,0,.22); }
@@ -46,11 +50,23 @@ export function mountWidget(): void {
   if (document.getElementById(ROOT_ID)) return;
   injectStyle();
 
+  // インライン SVG アイコン (絵文字ではなく。色は currentColor を継承)
+  const ICON_CHAT =
+    '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9'
+    + 'L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5'
+    + 'a8.48 8.48 0 0 1 8 8v.5z"/></svg>';
+  const ICON_CLOSE =
+    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
   const root = el(`
     <div id="${ROOT_ID}">
-      <button class="wai-fab" title="Wiki AI に質問">💬</button>
+      <button class="wai-fab" title="Wiki AI に質問" aria-label="Wiki AI に質問">${ICON_CHAT}</button>
       <div class="wai-panel">
-        <div class="wai-head"><span>Wiki AI アシスタント</span><button class="wai-close">×</button></div>
+        <div class="wai-head"><span>Wiki AI アシスタント</span><button class="wai-close" aria-label="閉じる">${ICON_CLOSE}</button></div>
         <div class="wai-log"></div>
         <form class="wai-form">
           <input type="text" placeholder="Wiki に質問…" autocomplete="off" />

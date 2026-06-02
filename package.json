@@ -4,7 +4,7 @@
   "description": "GROWI 埋め込み AI チャット (Gemini)。検索はユーザーのログインセッションで実行し権限に一致させる。",
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && node -e \"const fs=require('fs');fs.copyFileSync('dist/.vite/manifest.json','dist/manifest.json')\"",
     "dev": "vite build --watch"
   },
   "devDependencies": {
