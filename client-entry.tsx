@@ -20,3 +20,8 @@ const deactivate = (): void => {
 
 (window as any).pluginActivators = (window as any).pluginActivators || {};
 (window as any).pluginActivators[PLUGIN_ID] = { activate, deactivate };
+
+// GROWI はスクリプト読込のタイミングによっては activate() を自動で呼ばない
+// (登録より前に起動パスが走ると取りこぼす)。そのため自分でも起動する。
+// mountWidget は既存要素があれば何もしないので、GROWI が後から呼んでも二重生成しない。
+activate();
