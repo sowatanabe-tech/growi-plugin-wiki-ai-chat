@@ -47,6 +47,18 @@ export async function retrieveAsUser(query: string): Promise<Passage[]> {
   return results.filter((p): p is Passage => p !== null);
 }
 
+// 現ユーザーが編集できるか (ROM/閲覧専用でないか)。
+// GROWI の currentUser.readOnly が false のときだけ true。
+// 判定不能時は false (= 編集UIを出さない安全側)。書込自体も GROWI が二重に弾く。
+export async function getCanEdit(): Promise<boolean> {
+  try {
+    const data = await getJson('/_api/v3/personal-setting');
+    return data?.currentUser?.readOnly === false;
+  } catch {
+    return false;
+  }
+}
+
 export type PageFull = { path: string; body: string; pageId: string; revisionId: string };
 
 // いま閲覧しているページの生オブジェクトを取得。

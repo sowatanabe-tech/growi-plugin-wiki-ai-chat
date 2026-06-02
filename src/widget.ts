@@ -3,7 +3,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { diffLines } from 'diff';
 import {
-  retrieveAsUser, getCurrentPage, getCurrentPageFull, updatePage, createPage, type Passage,
+  retrieveAsUser, getCurrentPage, getCurrentPageFull, updatePage, createPage, getCanEdit, type Passage,
 } from './growi-api';
 import { chat, toSearchQuery, editDraft, editDraftFromFile, type Turn } from './backend';
 
@@ -257,6 +257,14 @@ export function mountWidget(): void {
   setMode('chat');
   root.querySelectorAll('.wai-mode').forEach((b) => {
     b.addEventListener('click', () => setMode((b as HTMLElement).dataset.mode as 'chat' | 'edit'));
+  });
+
+  // 編集タブは閲覧専用(ROM)ユーザーには出さない。編集権限を確認できた時だけ表示。
+  const modesBar = root.querySelector('.wai-modes') as HTMLElement;
+  modesBar.style.display = 'none';
+  getCanEdit().then((canEdit) => {
+    if (canEdit) modesBar.style.display = 'flex';
+    else setMode('chat'); // 念のため chat に固定
   });
 
   const renderMsg = (msg: Msg): HTMLElement => {
