@@ -7,6 +7,10 @@ import {
 } from './growi-api';
 import { chat, toSearchQuery, editDraft, editDraftFromFile, type Turn } from './backend';
 
+// 編集機能(編集モード)の有効/無効。UX 再設計までいったん無効化する。
+// true に戻すだけで編集タブが再表示される(フラグ方式)。
+const EDIT_ENABLED = false;
+
 const STYLE_ID = 'wiki-ai-chat-style';
 const ROOT_ID = 'wiki-ai-chat-root';
 const HISTORY_KEY = 'wiki-ai-chat-history';
@@ -291,10 +295,14 @@ export function mountWidget(): void {
   // 編集タブは閲覧専用(ROM)ユーザーには出さない。編集権限を確認できた時だけ表示。
   const modesBar = root.querySelector('.wai-modes') as HTMLElement;
   modesBar.style.display = 'none';
-  getCanEdit().then((canEdit) => {
-    if (canEdit) modesBar.style.display = 'flex';
-    else setMode('chat'); // 念のため chat に固定
-  });
+  if (EDIT_ENABLED) {
+    getCanEdit().then((canEdit) => {
+      if (canEdit) modesBar.style.display = 'flex';
+      else setMode('chat'); // 念のため chat に固定
+    });
+  } else {
+    setMode('chat'); // 編集機能は一時無効: 質問(Q&A)専用にする
+  }
 
   const renderMsg = (msg: Msg): HTMLElement => {
     const m = el(`<div class="wai-msg ${msg.role === 'user' ? 'wai-user' : 'wai-bot'}"></div>`);
