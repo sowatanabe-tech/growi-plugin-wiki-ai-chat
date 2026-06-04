@@ -31,12 +31,15 @@ const CSS = `
   background: var(--bs-primary, #4794d3); color: #fff; cursor: pointer;
   box-shadow: 0 4px 12px rgba(0,0,0,.25); display: flex; align-items: center; justify-content: center; }
 #${ROOT_ID} .wai-fab:hover { filter: brightness(0.93); }
-#${ROOT_ID} .wai-panel { display: none; flex-direction: column; width: 380px; height: 540px;
+#${ROOT_ID} .wai-panel { display: none; flex-direction: column; width: 440px; height: min(640px, 84vh);
+  max-width: 94vw;
   background: var(--bs-body-bg, #fff); color: var(--bs-body-color, #212529);
   border: 1px solid var(--bs-border-color, #dee2e6); border-radius: var(--bs-border-radius-lg, 12px);
   overflow: hidden; box-shadow: 0 8px 28px rgba(0,0,0,.22); }
 #${ROOT_ID}.open .wai-panel { display: flex; }
 #${ROOT_ID}.open .wai-fab { display: none; }
+/* 拡大モード: 画面の大部分を使う */
+#${ROOT_ID}.maxed .wai-panel { width: min(980px, 94vw); height: min(900px, 90vh); }
 #${ROOT_ID} .wai-head { background: var(--bs-primary, #4794d3); color: #fff; padding: 10px 12px;
   display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 #${ROOT_ID} .wai-head .wai-title { font-weight: 600; }
@@ -104,10 +107,19 @@ const CSS = `
 #${ROOT_ID} .wai-diff { background: var(--bs-body-bg, #fff); border: 1px solid var(--bs-border-color, #dee2e6);
   border-radius: var(--bs-border-radius, 8px); padding: 8px; align-self: stretch; }
 #${ROOT_ID} .wai-diff-target { font-size: 12px; color: var(--bs-secondary-color, #6c757d); margin-bottom: 6px; }
-#${ROOT_ID} .wai-diff pre { margin: 0; max-height: 220px; overflow: auto; font-size: 12px; line-height: 1.45;
+#${ROOT_ID} .wai-diff pre { margin: 0; max-height: 320px; overflow: auto; font-size: 12px; line-height: 1.45;
   white-space: pre-wrap; word-break: break-word; }
 #${ROOT_ID} .wai-diff .add { background: rgba(46,160,67,.18); display: block; }
 #${ROOT_ID} .wai-diff .del { background: rgba(248,81,73,.18); display: block; text-decoration: line-through; opacity: .8; }
+/* 差分／プレビュー切替 */
+#${ROOT_ID} .wai-diff-tabs { display: flex; gap: 4px; margin-bottom: 6px; }
+#${ROOT_ID} .wai-diff-tab { font-size: 12px; border: 1px solid var(--bs-border-color, #dee2e6); background: transparent;
+  color: var(--bs-secondary-color, #6c757d); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+#${ROOT_ID} .wai-diff-tab.active { background: var(--bs-primary, #4794d3); color: #fff; border-color: var(--bs-primary, #4794d3); }
+#${ROOT_ID} .wai-diff-preview { border: 1px solid var(--bs-border-color, #dee2e6); border-radius: 6px; padding: 8px 10px;
+  max-height: 320px; overflow: auto; background: var(--bs-body-bg, #fff); }
+/* 拡大モードでは差分・プレビューの表示領域も広げる */
+#${ROOT_ID}.maxed .wai-diff pre, #${ROOT_ID}.maxed .wai-diff-preview { max-height: 62vh; }
 #${ROOT_ID} .wai-diff-btns { display: flex; gap: 8px; margin-top: 8px; }
 #${ROOT_ID} .wai-diff-btns button { border: none; border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px; }
 #${ROOT_ID} .wai-approve { background: var(--bs-success, #2da44e); color: #fff; }
@@ -139,6 +151,11 @@ const ICON_COPY =
   + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
   + '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
   + '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const ICON_EXPAND =
+  '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+  + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>'
+  + '<line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
 
 function el(html: string): HTMLElement {
   const t = document.createElement('template');
@@ -201,6 +218,7 @@ export function mountWidget(): void {
         <div class="wai-head">
           <span class="wai-title">Wiki AI アシスタント</span>
           <span class="wai-head-actions">
+            <button class="wai-max" title="拡大" aria-label="拡大">${ICON_EXPAND}</button>
             <button class="wai-clear" title="履歴を消去" aria-label="履歴を消去">${ICON_TRASH}</button>
             <button class="wai-close" title="閉じる" aria-label="閉じる">${ICON_CLOSE}</button>
           </span>
@@ -319,6 +337,12 @@ export function mountWidget(): void {
 
   root.querySelector('.wai-fab')!.addEventListener('click', () => { root.classList.add('open'); input.focus(); });
   root.querySelector('.wai-close')!.addEventListener('click', () => root.classList.remove('open'));
+  const maxBtn = root.querySelector('.wai-max') as HTMLButtonElement;
+  maxBtn.addEventListener('click', () => {
+    const maxed = root.classList.toggle('maxed');
+    maxBtn.title = maxed ? '元のサイズに戻す' : '拡大';
+    input.focus();
+  });
   root.querySelector('.wai-clear')!.addEventListener('click', () => {
     history = [];
     saveHistory(history);
@@ -356,9 +380,18 @@ export function mountWidget(): void {
       card.appendChild(el(`<div class="wai-diff-target">編集: ${escapeHtml(targetPath)}</div>`));
     }
 
+    // 「差分(または本文) / プレビュー」をタブで切り替えられるようにする。
+    const isNew = current === null;
+    const tabs = el('<div class="wai-diff-tabs"></div>');
+    const rawTab = el(`<button type="button" class="wai-diff-tab">${isNew ? '本文(Markdown)' : '差分'}</button>`);
+    const prevTab = el('<button type="button" class="wai-diff-tab">プレビュー</button>');
+    tabs.appendChild(rawTab);
+    tabs.appendChild(prevTab);
+    card.appendChild(tabs);
+
     const pre = document.createElement('pre');
-    if (current === null) {
-      pre.textContent = proposed; // 新規は全文プレビュー
+    if (isNew) {
+      pre.textContent = proposed; // 新規は全文(Markdown)
     } else {
       for (const part of diffLines(current, proposed)) {
         const span = document.createElement('span');
@@ -369,6 +402,22 @@ export function mountWidget(): void {
       }
     }
     card.appendChild(pre);
+
+    // 反映後の見た目を確認できる描画プレビュー。
+    const preview = el('<div class="wai-diff-preview wai-md"></div>');
+    preview.innerHTML = renderMarkdown(proposed);
+    card.appendChild(preview);
+
+    const showView = (view: 'raw' | 'preview'): void => {
+      const previewOn = view === 'preview';
+      pre.style.display = previewOn ? 'none' : '';
+      preview.style.display = previewOn ? '' : 'none';
+      rawTab.classList.toggle('active', !previewOn);
+      prevTab.classList.toggle('active', previewOn);
+    };
+    rawTab.addEventListener('click', () => showView('raw'));
+    prevTab.addEventListener('click', () => showView('preview'));
+    showView(isNew ? 'preview' : 'raw'); // 新規はプレビュー、編集は差分を既定表示
     const btns = el('<div class="wai-diff-btns"></div>');
     const approve = el('<button class="wai-approve" type="button">承認して反映</button>');
     const reject = el('<button class="wai-reject" type="button">却下</button>');
