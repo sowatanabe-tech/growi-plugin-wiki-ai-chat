@@ -79,12 +79,12 @@ function enhanceAll(): void {
 export function enableCodeCopy(): void {
   injectStyle();
   enhanceAll();
-  // SPA 遷移・遅延描画に追従 (連続変更は rAF でまとめる)
-  let scheduled = false;
+  // SPA 遷移・遅延描画に追従。連続変更は setTimeout でまとめる。
+  // (rAF はタブが非表示だと停止するため、背面タブでも発火する setTimeout を使う)
+  let timer: number | undefined;
   const observer = new MutationObserver(() => {
-    if (scheduled) return;
-    scheduled = true;
-    requestAnimationFrame(() => { scheduled = false; enhanceAll(); });
+    if (timer !== undefined) return;
+    timer = window.setTimeout(() => { timer = undefined; enhanceAll(); }, 150);
   });
   observer.observe(document.body, { childList: true, subtree: true });
 }
